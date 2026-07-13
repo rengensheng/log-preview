@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../core/log_level.dart';
 
-/// 日志筛选栏 — 文本搜索 + 级别筛选 + 日期范围
+/// 搜索栏 — 关键词跳转导航 + 级别筛选 + 日期范围
 class LogFilterBar extends StatefulWidget {
   final bool isDark;
   final ValueChanged<String> onSearchChanged;
+  final VoidCallback? onPrevMatch;
+  final VoidCallback? onNextMatch;
+  final int matchCount;
+  final int currentMatch;
   final ValueChanged<Set<LogLevel>> onLevelFilterChanged;
   final VoidCallback? onClose;
   final DateTime? startDate;
@@ -17,6 +21,10 @@ class LogFilterBar extends StatefulWidget {
     super.key,
     required this.isDark,
     required this.onSearchChanged,
+    this.onPrevMatch,
+    this.onNextMatch,
+    this.matchCount = 0,
+    this.currentMatch = 0,
     required this.onLevelFilterChanged,
     this.onClose,
     this.startDate,
@@ -32,6 +40,7 @@ class LogFilterBar extends StatefulWidget {
 class _LogFilterBarState extends State<LogFilterBar> {
   final _searchController = TextEditingController();
   final _selectedLevels = <LogLevel>{};
+  bool _hasSearchText = false;
 
   @override
   void dispose() {
@@ -49,38 +58,32 @@ class _LogFilterBarState extends State<LogFilterBar> {
       initialDate: initial,
       firstDate: DateTime(2000),
       lastDate: DateTime(2100),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: widget.isDark
-                ? const ColorScheme.dark(primary: Colors.blue)
-                : const ColorScheme.light(primary: Colors.blue),
-          ),
-          child: child!,
-        );
-      },
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: widget.isDark
+              ? const ColorScheme.dark(primary: Colors.blue)
+              : const ColorScheme.light(primary: Colors.blue),
+        ),
+        child: child!,
+      ),
     );
     if (date == null || !mounted) return;
 
-    // 选择具体时间
     final time = await showTimePicker(
       context: context,
       initialTime: TimeOfDay.fromDateTime(initial),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: widget.isDark
-                ? const ColorScheme.dark(primary: Colors.blue)
-                : const ColorScheme.light(primary: Colors.blue),
-          ),
-          child: child!,
-        );
-      },
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: widget.isDark
+              ? const ColorScheme.dark(primary: Colors.blue)
+              : const ColorScheme.light(primary: Colors.blue),
+        ),
+        child: child!,
+      ),
     );
     if (time == null || !mounted) return;
 
     final dt = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-
     if (isStart) {
       widget.onStartDateChanged?.call(dt);
     } else {
@@ -101,59 +104,93 @@ class _LogFilterBarState extends State<LogFilterBar> {
     final bg = widget.isDark ? const Color(0xFF252526) : const Color(0xFFF5F5F5);
     final chipBg = widget.isDark ? Colors.white12 : Colors.black12;
     final accent = widget.isDark ? Colors.blue.shade300 : Colors.blue;
+    final hasMatches = widget.matchCount > 0;
 
     return Container(
       color: bg,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // 搜索框
+          // 搜索框行
           Row(
             children: [
-              Icon(Icons.search,
-                  size: 20,
+              Icon(Icons.search, size: 18,
                   color: widget.isDark ? Colors.white54 : Colors.black54),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Expanded(
                 child: TextField(
                   controller: _searchController,
                   autofocus: true,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: widget.isDark ? Colors.white : Colors.black87,
-                  ),
+                  style: TextStyle(fontSize: 13,
+                      color: widget.isDark ? Colors.white : Colors.black87),
                   decoration: InputDecoration(
-                    hintText: '搜索日志内容...',
+                    hintText: '输入关键词跳转...',
                     hintStyle: TextStyle(
-                      color: widget.isDark ? Colors.white38 : Colors.black38,
-                    ),
+                        color: widget.isDark ? Colors.white38 : Colors.black38),
                     border: InputBorder.none,
                     isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 6),
                   ),
-                  onChanged: widget.onSearchChanged,
+                  onChanged: (v) {
+                    widget.onSearchChanged(v);
+                    setState(() => _hasSearchText = v.isNotEmpty);
+                  },
                 ),
               ),
+              // 匹配计数 + 上下导航
+              if (_hasSearchText) ...[
+                Text(
+                  hasMatches
+                      ? '${widget.currentMatch}/${widget.matchCount}'
+                      : '0/0',
+                  style: TextStyle(fontSize: 11, fontFamily: 'monospace',
+                      color: hasMatches
+                          ? accent
+                          : (widget.isDark ? Colors.white38 : Colors.black38)),
+                ),
+                const SizedBox(width: 2),
+                IconButton(
+                  icon: Icon(Icons.keyboard_arrow_up, size: 18,
+                      color: hasMatches
+                          ? (widget.isDark ? Colors.white70 : Colors.black87)
+                          : (widget.isDark ? Colors.white24 : Colors.black26)),
+                  onPressed: hasMatches ? widget.onPrevMatch : null,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                ),
+                IconButton(
+                  icon: Icon(Icons.keyboard_arrow_down, size: 18,
+                      color: hasMatches
+                          ? (widget.isDark ? Colors.white70 : Colors.black87)
+                          : (widget.isDark ? Colors.white24 : Colors.black26)),
+                  onPressed: hasMatches ? widget.onNextMatch : null,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                ),
+              ],
               if (_searchController.text.isNotEmpty)
                 IconButton(
-                  icon: const Icon(Icons.clear, size: 18),
+                  icon: const Icon(Icons.clear, size: 16),
                   onPressed: () {
                     _searchController.clear();
                     widget.onSearchChanged('');
+                    setState(() => _hasSearchText = false);
                   },
                   padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                 ),
               if (widget.onClose != null)
                 IconButton(
-                  icon: Icon(Icons.close,
+                  icon: Icon(Icons.close, size: 18,
                       color: widget.isDark ? Colors.white54 : Colors.black54),
                   onPressed: widget.onClose,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
                 ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 4),
           // 级别筛选芯片
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
@@ -162,22 +199,20 @@ class _LogFilterBarState extends State<LogFilterBar> {
                   .where((l) => l != LogLevel.unknown)
                   .map((level) {
                 final selected = _selectedLevels.contains(level);
-                final color =
-                    widget.isDark ? level.darkColor : level.lightColor;
+                final color = widget.isDark ? level.darkColor : level.lightColor;
                 return Padding(
-                  padding: const EdgeInsets.only(right: 6),
+                  padding: const EdgeInsets.only(right: 4),
                   child: FilterChip(
                     label: Text(level.label,
                         style: const TextStyle(
-                            fontSize: 11, fontFamily: 'monospace')),
+                            fontSize: 10, fontFamily: 'monospace')),
                     selected: selected,
                     selectedColor: color.withAlpha(60),
                     checkmarkColor: color,
                     labelStyle: TextStyle(
-                      color: selected
-                          ? color
+                      color: selected ? color
                           : (widget.isDark ? Colors.white54 : Colors.black54),
-                      fontSize: 11,
+                      fontSize: 10,
                     ),
                     side: BorderSide(color: color.withAlpha(80)),
                     backgroundColor: chipBg,
@@ -198,41 +233,32 @@ class _LogFilterBarState extends State<LogFilterBar> {
               }).toList(),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           // 日期范围行
           Row(
             children: [
-              Icon(Icons.date_range,
-                  size: 16,
+              Icon(Icons.date_range, size: 14,
                   color: widget.isDark ? Colors.white38 : Colors.black38),
-              const SizedBox(width: 6),
-              // 开始日期
+              const SizedBox(width: 4),
               _DateChip(
                 label: '开始: ${_formatDateTime(widget.startDate)}',
-                isDark: widget.isDark,
-                accent: accent,
+                isDark: widget.isDark, accent: accent,
                 isActive: widget.startDate != null,
                 onTap: () => _pickDate(isStart: true),
                 onClear: widget.startDate != null
-                    ? () => widget.onStartDateChanged?.call(null)
-                    : null,
+                    ? () => widget.onStartDateChanged?.call(null) : null,
               ),
-              const SizedBox(width: 4),
-              Text('—',
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: widget.isDark ? Colors.white38 : Colors.black38)),
-              const SizedBox(width: 4),
-              // 结束日期
+              const SizedBox(width: 2),
+              Text('—', style: TextStyle(fontSize: 10,
+                  color: widget.isDark ? Colors.white38 : Colors.black38)),
+              const SizedBox(width: 2),
               _DateChip(
                 label: '结束: ${_formatDateTime(widget.endDate)}',
-                isDark: widget.isDark,
-                accent: accent,
+                isDark: widget.isDark, accent: accent,
                 isActive: widget.endDate != null,
                 onTap: () => _pickDate(isStart: false),
                 onClear: widget.endDate != null
-                    ? () => widget.onEndDateChanged?.call(null)
-                    : null,
+                    ? () => widget.onEndDateChanged?.call(null) : null,
               ),
             ],
           ),
@@ -242,7 +268,6 @@ class _LogFilterBarState extends State<LogFilterBar> {
   }
 }
 
-/// 日期选择小芯片
 class _DateChip extends StatelessWidget {
   final String label;
   final bool isDark;
@@ -264,17 +289,15 @@ class _DateChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(4),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         decoration: BoxDecoration(
-          color: isActive
-              ? accent.withAlpha(30)
+          color: isActive ? accent.withAlpha(30)
               : (isDark ? Colors.white10 : Colors.black12),
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(4),
           border: Border.all(
-            color: isActive
-                ? accent.withAlpha(100)
+            color: isActive ? accent.withAlpha(100)
                 : (isDark ? Colors.white24 : Colors.black26),
             width: 0.5,
           ),
@@ -282,22 +305,14 @@ class _DateChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 11,
-                fontFamily: 'monospace',
-                color: isActive
-                    ? accent
-                    : (isDark ? Colors.white54 : Colors.black54),
-              ),
-            ),
+            Text(label, style: TextStyle(fontSize: 10, fontFamily: 'monospace',
+                color: isActive ? accent
+                    : (isDark ? Colors.white54 : Colors.black54))),
             if (onClear != null) ...[
-              const SizedBox(width: 4),
+              const SizedBox(width: 2),
               GestureDetector(
                 onTap: onClear,
-                child: Icon(Icons.close,
-                    size: 12,
+                child: Icon(Icons.close, size: 10,
                     color: isDark ? Colors.white38 : Colors.black38),
               ),
             ],

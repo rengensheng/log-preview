@@ -1,5 +1,6 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../core/log_level.dart';
@@ -10,7 +11,7 @@ import '../widgets/log_filter_bar.dart';
 import '../widgets/log_line_widget.dart';
 import '../widgets/log_scroll_bar.dart';
 
-/// 日志查看页 — 展示解析后的日志内容
+/// 日志查看页 — 搜索跳转 + 滚动条导航
 class LogViewerPage extends StatefulWidget {
   final List<String> lines;
   final String filePath;
@@ -36,38 +37,29 @@ class _LogViewerPageState extends State<LogViewerPage> {
 
   List<LogEntry> _allEntries = [];
   List<LogEntry> _filteredEntries = [];
+  final Set<int> _expandedIndices = {};
   bool _isSearching = false;
   String _searchQuery = '';
+  List<int> _matchIndices = [];
+  int _currentMatchIdx = -1;
   Set<LogLevel> _levelFilter = {};
   DateTime? _dateStart;
   DateTime? _dateEnd;
   int _activeFilterCount = 0;
   bool _isDark = false;
-  bool _autoScroll = true;
 
   @override
   void initState() {
     super.initState();
     _isDark = Theme.of(context).brightness == Brightness.dark;
     _parseLogs();
-    _scrollController.addListener(_onScroll);
   }
 
   @override
   void dispose() {
-    _scrollController.removeListener(_onScroll);
+    _searchDebounce?.cancel();
     _scrollController.dispose();
     super.dispose();
-  }
-
-  void _onScroll() {
-    final maxScroll = _scrollController.position.maxScrollExtent;
-    final currentScroll = _scrollController.position.pixels;
-    if (maxScroll - currentScroll > 200 && _autoScroll) {
-      setState(() => _autoScroll = false);
-    } else if (maxScroll - currentScroll < 50 && !_autoScroll) {
-      setState(() => _autoScroll = true);
-    }
   }
 
   void _parseLogs() {
@@ -88,27 +80,14 @@ class _LogViewerPageState extends State<LogViewerPage> {
       }).toList();
     }
 
-    // 文本搜索
-    if (_searchQuery.isNotEmpty) {
-      filterCount++;
-      final query = _searchQuery.toLowerCase();
-      entries = entries.where((e) {
-        return e.rawText.toLowerCase().contains(query);
-      }).toList();
-    }
-
     // 日期范围筛选
     if (_dateStart != null || _dateEnd != null) {
       filterCount++;
       entries = entries.where((e) {
-        if (e.isContinuation) return true; // 续行保留（跟随上一行）
+        if (e.isContinuation) return true;
         if (e.dateTime == null) return _dateStart == null && _dateEnd == null;
-        if (_dateStart != null && e.dateTime!.isBefore(_dateStart!)) {
-          return false;
-        }
-        if (_dateEnd != null && e.dateTime!.isAfter(_dateEnd!)) {
-          return false;
-        }
+        if (_dateStart != null && e.dateTime!.isBefore(_dateStart!)) return false;
+        if (_dateEnd != null && e.dateTime!.isAfter(_dateEnd!)) return false;
         return true;
       }).toList();
     }
@@ -117,6 +96,106 @@ class _LogViewerPageState extends State<LogViewerPage> {
       _filteredEntries = entries;
       _activeFilterCount = filterCount;
     });
+
+    // 重新计算搜索匹配
+    if (_searchQuery.isNotEmpty) _computeMatches();
+  }
+
+  // ─── 搜索导航 ───
+
+  Timer? _searchDebounce;
+
+  void _computeMatches() {
+    if (_searchQuery.isEmpty) {
+      _matchIndices = [];
+      _currentMatchIdx = -1;
+      return;
+    }
+    final q = _searchQuery.toLowerCase();
+    final indices = <int>[];
+    for (var i = 0; i < _filteredEntries.length; i++) {
+      if (_filteredEntries[i].rawText.toLowerCase().contains(q)) {
+        indices.add(i);
+      }
+    }
+    _matchIndices = indices;
+    _currentMatchIdx = indices.isNotEmpty ? 0 : -1;
+  }
+
+  void _jumpToCurrentMatch() {
+    if (_currentMatchIdx < 0 || _matchIndices.isEmpty) return;
+    final targetIndex = _matchIndices[_currentMatchIdx];
+    _scrollToIndex(targetIndex);
+  }
+
+  void _scrollToIndex(int index) {
+    if (!_scrollController.hasClients) {
+      // 重试：等下一帧布局完成
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToIndex(index);
+      });
+      return;
+    }
+    final position = _scrollController.position;
+    final maxScroll = position.maxScrollExtent;
+    if (maxScroll <= 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToIndex(index);
+      });
+      return;
+    }
+
+    // 校准估算：用当前可见的第一项推算平均行高
+    final viewport = position.viewportDimension;
+    final estimatedItemHeight = _estimateItemHeight(position);
+    final targetTop = index * estimatedItemHeight;
+
+    // 目标位置：让匹配行出现在视口 1/3 处
+    final target = (targetTop - viewport * 0.3).clamp(0.0, maxScroll);
+
+    // 取消旧动画，直接跳转
+    _scrollController.jumpTo(target);
+  }
+
+  /// 根据当前可见区域估算每行平均高度
+  double _estimateItemHeight(ScrollPosition position) {
+    // 用总内容高度 / 总行数 作为粗略估算
+    final maxScroll = position.maxScrollExtent;
+    final viewport = position.viewportDimension;
+    final totalContent = maxScroll + viewport;
+    if (_filteredEntries.length <= 1) return 50;
+    final avg = totalContent / _filteredEntries.length;
+    return avg.clamp(20.0, 200.0);
+  }
+
+  void _onSearchChanged(String query) {
+    _searchDebounce?.cancel();
+    _searchQuery = query;
+    _computeMatches();
+
+    if (_matchIndices.isNotEmpty) {
+      _currentMatchIdx = 0;
+      // 取消旧动画后延迟跳转，等 UI 刷新
+      _searchDebounce = Timer(const Duration(milliseconds: 80), () {
+        if (mounted) _jumpToCurrentMatch();
+      });
+    }
+    setState(() {});
+  }
+
+  void _onPrevMatch() {
+    if (_matchIndices.isEmpty) return;
+    _currentMatchIdx =
+        (_currentMatchIdx - 1 + _matchIndices.length) % _matchIndices.length;
+    _jumpToCurrentMatch();
+    setState(() {});
+  }
+
+  void _onNextMatch() {
+    if (_matchIndices.isEmpty) return;
+    _currentMatchIdx = (_currentMatchIdx + 1) % _matchIndices.length;
+    _jumpToCurrentMatch();
+    setState(() {});
   }
 
   void _toggleSearch() {
@@ -124,14 +203,10 @@ class _LogViewerPageState extends State<LogViewerPage> {
       _isSearching = !_isSearching;
       if (!_isSearching) {
         _searchQuery = '';
-        _applyFilters();
+        _matchIndices = [];
+        _currentMatchIdx = -1;
       }
     });
-  }
-
-  void _onSearchChanged(String query) {
-    _searchQuery = query;
-    _applyFilters();
   }
 
   void _onLevelFilterChanged(Set<LogLevel> levels) {
@@ -148,23 +223,11 @@ class _LogViewerPageState extends State<LogViewerPage> {
     _dateEnd = dt;
     _applyFilters();
   }
-
-  void _scrollToTop() {
-    _scrollController.animateTo(
-      0,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOut,
-    );
-  }
-
-  void _scrollToBottom() {
-    final maxScroll = _scrollController.position.maxScrollExtent;
-    _scrollController.animateTo(
-      maxScroll,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeOut,
-    );
-  }
+  bool isCurrentMatch(int index) =>
+      _searchQuery.isNotEmpty &&
+      _currentMatchIdx >= 0 &&
+      _matchIndices.isNotEmpty &&
+      index == _matchIndices[_currentMatchIdx];
 
   void _shareFile() async {
     try {
@@ -181,14 +244,14 @@ class _LogViewerPageState extends State<LogViewerPage> {
     }
   }
 
-  void _copyEntry(LogEntry entry) {
-    Clipboard.setData(ClipboardData(text: entry.rawText));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('已复制到剪贴板'),
-        duration: Duration(seconds: 1),
-      ),
-    );
+  void _toggleExpand(int index) {
+    setState(() {
+      if (_expandedIndices.contains(index)) {
+        _expandedIndices.remove(index);
+      } else {
+        _expandedIndices.add(index);
+      }
+    });
   }
 
   Map<LogLevel, int> _countByLevel() {
@@ -201,7 +264,6 @@ class _LogViewerPageState extends State<LogViewerPage> {
     return counts;
   }
 
-  /// 日期范围描述
   String get _dateRangeDesc {
     if (_dateStart == null && _dateEnd == null) return '';
     return '${_fmtDt(_dateStart)} — ${_fmtDt(_dateEnd)}';
@@ -216,11 +278,16 @@ class _LogViewerPageState extends State<LogViewerPage> {
 
   String _buildSubtitle(String sizeStr) {
     final base = '${_allEntries.length} 行 · $sizeStr';
+    final parts = <String>[base];
     if (widget.encoding != null && widget.encoding != 'utf-8') {
-      return '$base  · 编码: ${widget.encoding}';
+      parts.add('编码: ${widget.encoding}');
     }
-    return base;
+    if (_searchQuery.isNotEmpty) {
+      parts.add('匹配 ${_matchIndices.length} 处');
+    }
+    return parts.join('  ·  ');
   }
+
   @override
   Widget build(BuildContext context) {
     final fileName = _fileService.fileNameFromPath(widget.filePath);
@@ -228,18 +295,16 @@ class _LogViewerPageState extends State<LogViewerPage> {
     final levelCounts = _countByLevel();
     final bg = _isDark ? const Color(0xFF1E1E1E) : const Color(0xFFFAFAFA);
     final hasActiveFilter = _activeFilterCount > 0;
-
     return Scaffold(
       backgroundColor: bg,
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(fileName, style: const TextStyle(fontSize: 16)),
+            Text(fileName, style: const TextStyle(fontSize: 15)),
             Text(
               _buildSubtitle(sizeStr),
-              style: TextStyle(
-                  fontSize: 11,
+              style: TextStyle(fontSize: 10,
                   color: _isDark ? Colors.white54 : Colors.black54),
             ),
           ],
@@ -248,12 +313,13 @@ class _LogViewerPageState extends State<LogViewerPage> {
           if (levelCounts.isNotEmpty)
             Center(child: _buildLevelSummary(levelCounts)),
           IconButton(
-            icon: Icon(_isSearching ? Icons.search_off : Icons.search),
+            icon: Icon(_isSearching ? Icons.search_off : Icons.search,
+                size: 20),
             tooltip: '搜索',
             onPressed: _toggleSearch,
           ),
           IconButton(
-            icon: const Icon(Icons.share),
+            icon: const Icon(Icons.share, size: 20),
             tooltip: '分享文件',
             onPressed: _shareFile,
           ),
@@ -261,11 +327,14 @@ class _LogViewerPageState extends State<LogViewerPage> {
       ),
       body: Column(
         children: [
-          // 搜索/筛选栏
           if (_isSearching)
             LogFilterBar(
               isDark: _isDark,
               onSearchChanged: _onSearchChanged,
+              onPrevMatch: _onPrevMatch,
+              onNextMatch: _onNextMatch,
+              matchCount: _matchIndices.length,
+              currentMatch: _currentMatchIdx + 1,
               onLevelFilterChanged: _onLevelFilterChanged,
               onClose: _toggleSearch,
               startDate: _dateStart,
@@ -273,56 +342,42 @@ class _LogViewerPageState extends State<LogViewerPage> {
               onStartDateChanged: _onStartDateChanged,
               onEndDateChanged: _onEndDateChanged,
             ),
-          // 筛选结果提示
           if (hasActiveFilter)
             Container(
               width: double.infinity,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              color:
-                  _isDark ? Colors.blueGrey.shade900 : Colors.blue.shade50,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              color: _isDark ? Colors.blueGrey.shade900 : Colors.blue.shade50,
               child: Row(
                 children: [
                   Text(
                     '筛选: ${_filteredEntries.length} / ${_allEntries.length} 条',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: _isDark ? Colors.white70 : Colors.black87,
-                    ),
+                    style: TextStyle(fontSize: 11,
+                        color: _isDark ? Colors.white70 : Colors.black87),
                   ),
                   if (_dateRangeDesc.isNotEmpty) ...[
-                    const SizedBox(width: 12),
-                    Icon(Icons.date_range, size: 12,
+                    const SizedBox(width: 8),
+                    Icon(Icons.date_range, size: 11,
                         color: _isDark ? Colors.white54 : Colors.black54),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: 2),
                     Expanded(
-                      child: Text(
-                        _dateRangeDesc,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontFamily: 'monospace',
-                          color: _isDark ? Colors.white54 : Colors.black54,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      child: Text(_dateRangeDesc,
+                          style: TextStyle(fontSize: 10, fontFamily: 'monospace',
+                              color: _isDark ? Colors.white54 : Colors.black54),
+                          overflow: TextOverflow.ellipsis),
                     ),
                   ],
                 ],
               ),
             ),
-          // 日志列表 + 滚动条
           Expanded(
             child: Stack(
               children: [
-                // 日志列表
                 _filteredEntries.isEmpty
                     ? Center(
                         child: Text(
                           _allEntries.isEmpty ? '无日志内容' : '无匹配结果',
                           style: TextStyle(
-                            color:
-                                _isDark ? Colors.white38 : Colors.black38,
-                          ),
+                              color: _isDark ? Colors.white38 : Colors.black38),
                         ),
                       )
                     : ListView.builder(
@@ -330,22 +385,24 @@ class _LogViewerPageState extends State<LogViewerPage> {
                         itemCount: _filteredEntries.length,
                         keyboardDismissBehavior:
                             ScrollViewKeyboardDismissBehavior.onDrag,
-                        padding: const EdgeInsets.only(right: 30),
+                        padding: const EdgeInsets.only(right: 38),
                         itemBuilder: (context, index) {
                           return LogLineWidget(
                             entry: _filteredEntries[index],
                             isDark: _isDark,
-                            onTap: () =>
-                                _copyEntry(_filteredEntries[index]),
+                            highlightQuery: _searchQuery,
+                            isCurrentMatch: isCurrentMatch(index),
+                            isExpanded: _expandedIndices.contains(index),
+                            onTap: () => _toggleExpand(index),
                           );
                         },
                       ),
-                // 可拖拽滚动条（阅读进度条）
                 if (_filteredEntries.isNotEmpty)
                   Positioned(
                     right: 0,
                     top: 0,
                     bottom: 0,
+                    width: 36,
                     child: LogScrollBar(
                       controller: _scrollController,
                       itemCount: _filteredEntries.length,
@@ -357,42 +414,11 @@ class _LogViewerPageState extends State<LogViewerPage> {
           ),
         ],
       ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          FloatingActionButton.small(
-            heroTag: 'bottom',
-            onPressed: _autoScroll ? null : _scrollToBottom,
-            backgroundColor: _autoScroll
-                ? (_isDark ? Colors.white12 : Colors.black12)
-                : (_isDark ? Colors.blue.shade800 : Colors.blue),
-            child: Icon(
-              Icons.keyboard_arrow_down,
-              color: _autoScroll
-                  ? (_isDark ? Colors.white38 : Colors.black38)
-                  : Colors.white,
-            ),
-          ),
-          const SizedBox(height: 8),
-          FloatingActionButton.small(
-            heroTag: 'top',
-            onPressed: _scrollToTop,
-            backgroundColor: _isDark ? Colors.white12 : Colors.black12,
-            child: Icon(Icons.keyboard_arrow_up,
-                color: _isDark ? Colors.white70 : Colors.black54),
-          ),
-        ],
-      ),
     );
   }
 
   Widget _buildLevelSummary(Map<LogLevel, int> counts) {
-    final items = [
-      LogLevel.error,
-      LogLevel.warning,
-      LogLevel.info,
-      LogLevel.debug,
-    ];
+    final items = [LogLevel.error, LogLevel.warning, LogLevel.info, LogLevel.debug];
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: items.map((level) {
@@ -400,27 +426,16 @@ class _LogViewerPageState extends State<LogViewerPage> {
         if (count == 0) return const SizedBox.shrink();
         final color = _isDark ? level.darkColor : level.lightColor;
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 2),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: color,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              const SizedBox(width: 2),
-              Text(
-                '$count',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontFamily: 'monospace',
-                  color: color,
-                ),
-              ),
+              Container(width: 7, height: 7, decoration: BoxDecoration(
+                  color: color, shape: BoxShape.circle)),
+              const SizedBox(width: 1),
+              Text('$count',
+                  style: TextStyle(fontSize: 9, fontFamily: 'monospace',
+                      color: color)),
             ],
           ),
         );

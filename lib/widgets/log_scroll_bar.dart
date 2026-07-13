@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// 可拖拽的快速滚动条 — 始终可见的进度指示器
+/// 大滑块滚动条 — 醒目、可拖拽、始终可见
 class LogScrollBar extends StatefulWidget {
   final ScrollController controller;
   final int itemCount;
@@ -20,12 +20,11 @@ class LogScrollBar extends StatefulWidget {
 class _LogScrollBarState extends State<LogScrollBar> {
   bool _isDragging = false;
   double _dragFraction = 0;
-  String _tooltipText = '';
   double _displayFraction = 0;
 
+  static const _totalWidth = 36.0;
   static const _barWidth = 8.0;
-  static const _hitWidth = 28.0;
-  static const _minThumbHeight = 28.0;
+  static const _minThumbHeight = 36.0;
 
   @override
   void initState() {
@@ -48,181 +47,139 @@ class _LogScrollBarState extends State<LogScrollBar> {
   }
 
   double get _scrollFraction {
-    final position =
-        widget.controller.hasClients ? widget.controller.position : null;
-    if (position == null || position.maxScrollExtent <= 0) return 0;
-    return (position.pixels / position.maxScrollExtent).clamp(0.0, 1.0);
+    final p = widget.controller.hasClients ? widget.controller.position : null;
+    if (p == null || p.maxScrollExtent <= 0) return 0;
+    return (p.pixels / p.maxScrollExtent).clamp(0.0, 1.0);
   }
 
-  double get _thumbFraction {
-    final position =
-        widget.controller.hasClients ? widget.controller.position : null;
-    if (position == null) return 0.3;
-    final viewport = position.viewportDimension;
-    final maxScroll = position.maxScrollExtent;
-    if (maxScroll <= 0) return 1.0;
-    return (viewport / (maxScroll + viewport)).clamp(0.05, 1.0);
+  double _thumbFraction(double barHeight) {
+    final p = widget.controller.hasClients ? widget.controller.position : null;
+    if (p == null) return 0.3;
+    final vp = p.viewportDimension;
+    final ms = p.maxScrollExtent;
+    if (ms <= 0) return 1.0;
+    return (vp / (ms + vp)).clamp(0.05, 1.0);
   }
 
-  int _fractionToIndex(double fraction) {
-    if (widget.itemCount <= 1) return 0;
-    return (fraction * (widget.itemCount - 1))
-        .round()
-        .clamp(0, widget.itemCount - 1);
-  }
-
-  void _onDragStart(DragStartDetails details) {
+  void _onDragStart(DragStartDetails d) {
     _isDragging = true;
-    _updateDrag(details.localPosition);
+    _updateDrag(d.localPosition);
   }
 
-  void _onDragUpdate(DragUpdateDetails details) {
-    _updateDrag(details.localPosition);
+  void _onDragUpdate(DragUpdateDetails d) {
+    _updateDrag(d.localPosition);
   }
 
-  void _onDragEnd(DragEndDetails details) {
+  void _onDragEnd(DragEndDetails d) {
     _isDragging = false;
     _displayFraction = _dragFraction;
-    final position =
-        widget.controller.hasClients ? widget.controller.position : null;
-    if (position != null) {
+    final p = widget.controller.hasClients ? widget.controller.position : null;
+    if (p != null) {
       widget.controller.jumpTo(
-        (_dragFraction * position.maxScrollExtent)
-            .clamp(0.0, position.maxScrollExtent),
+        (_dragFraction * p.maxScrollExtent).clamp(0.0, p.maxScrollExtent),
       );
     }
     if (mounted) setState(() {});
   }
 
-  void _updateDrag(Offset localPosition) {
+  void _updateDrag(Offset localPos) {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null) return;
-    final barHeight = box.size.height;
-    final thumbHeight =
-        (_thumbFraction * barHeight).clamp(_minThumbHeight, barHeight);
-    final trackLength = barHeight - thumbHeight;
-    final thumbCenter = localPosition.dy
-        .clamp(thumbHeight / 2, barHeight - thumbHeight / 2);
-    _dragFraction =
-        ((thumbCenter - thumbHeight / 2) / trackLength).clamp(0.0, 1.0);
+    final h = box.size.height;
+    final th = _thumbFraction(h).clamp(_minThumbHeight, h);
+    final trackLen = h - th;
+    final center = localPos.dy.clamp(th / 2, h - th / 2);
+    _dragFraction = ((center - th / 2) / trackLen).clamp(0.0, 1.0);
 
-    final idx = _fractionToIndex(_dragFraction);
-    final pct = (_dragFraction * 100).toStringAsFixed(1);
-    _tooltipText = '#$idx  $pct%';
-
-    final position =
-        widget.controller.hasClients ? widget.controller.position : null;
-    if (position != null) {
+    final p = widget.controller.hasClients ? widget.controller.position : null;
+    if (p != null) {
       widget.controller.jumpTo(
-        (_dragFraction * position.maxScrollExtent)
-            .clamp(0.0, position.maxScrollExtent),
+        (_dragFraction * p.maxScrollExtent).clamp(0.0, p.maxScrollExtent),
       );
     }
-
     if (mounted) setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final barHeight = constraints.maxHeight;
-        final thumbHeight =
-            (_thumbFraction * barHeight).clamp(_minThumbHeight, barHeight);
-        final trackLength = barHeight - thumbHeight;
-        final fraction = _isDragging ? _dragFraction : _displayFraction;
-        final thumbTop = trackLength * fraction;
+    final d = widget.isDark;
 
-        // 更醒目的颜色
-        final thumbColor =
-            widget.isDark ? Colors.blueGrey.shade300 : Colors.blueGrey.shade600;
-        final thumbDragColor =
-            widget.isDark ? Colors.blue.shade300 : Colors.blue;
-        final trackColor =
-            widget.isDark ? Colors.white24 : Colors.black26;
+    // 滑块颜色 — 静止时半透明，拖拽时实色
+    final thumbColor = d
+        ? const Color(0x55FFFFFF)
+        : const Color(0x55000000);
+    final thumbDragColor = d
+        ? const Color(0xFF90CAF9)
+        : const Color(0xFF1976D2);
 
-        final pctStr = '${(fraction * 100).toStringAsFixed(0)}%';
+    return SizedBox(
+      width: _totalWidth,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final barHeight = constraints.maxHeight;
+          if (barHeight <= 0) return const SizedBox.shrink();
 
-        return Stack(
-          children: [
-            // 触摸区域
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onVerticalDragStart: _onDragStart,
-                onVerticalDragUpdate: _onDragUpdate,
-                onVerticalDragEnd: _onDragEnd,
+          final thumbH =
+              (_thumbFraction(barHeight) * barHeight).clamp(_minThumbHeight, barHeight);
+          final trackLen = barHeight - thumbH;
+          final fraction = _isDragging ? _dragFraction : _displayFraction;
+          final thumbTop = trackLen * fraction;
+          final pct = '${(fraction * 100).toStringAsFixed(0)}%';
+          final idx = (fraction * (widget.itemCount - 1)).round();
+          final label = _isDragging ? '#$idx $pct' : pct;
+
+          return Stack(
+            clipBehavior: Clip.none,
+            children: [
+              // 触摸手势层
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onVerticalDragStart: _onDragStart,
+                  onVerticalDragUpdate: _onDragUpdate,
+                  onVerticalDragEnd: _onDragEnd,
+                ),
+              ),
+              // 方形滑块（无轨道背景）
+              Positioned(
+                right: (_totalWidth - _barWidth) / 2,
+                top: thumbTop,
                 child: Container(
-                  width: _hitWidth,
-                  color: Colors.transparent,
-                ),
-              ),
-            ),
-            // 轨道（更明显）
-            Positioned(
-              right: (_hitWidth - _barWidth) / 2,
-              top: 0,
-              bottom: 0,
-              child: Container(
-                width: _barWidth,
-                decoration: BoxDecoration(
-                  color: trackColor,
-                  borderRadius: BorderRadius.circular(_barWidth / 2),
-                ),
-              ),
-            ),
-            // 滑块（更宽更亮）
-            Positioned(
-              right:
-                  (_hitWidth - _barWidth) / 2 - (_isDragging ? 1 : 0),
-              top: thumbTop,
-              child: Container(
-                width: _barWidth + (_isDragging ? 2 : 0),
-                height: thumbHeight,
-                decoration: BoxDecoration(
-                  color: _isDragging ? thumbDragColor : thumbColor,
-                  borderRadius: BorderRadius.circular(_barWidth / 2 + 1),
-                  boxShadow: [
-                    BoxShadow(
-                      color: (_isDragging ? thumbDragColor : thumbColor)
-                          .withAlpha(60),
-                      blurRadius: 4,
-                      spreadRadius: 1,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            // 百分比标签（始终显示在滑块左侧）
-            Positioned(
-              right: _hitWidth,
-              top: (thumbTop + thumbHeight / 2 - 10)
-                  .clamp(0.0, barHeight - 20),
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                decoration: BoxDecoration(
-                  color: (widget.isDark
-                          ? Colors.grey.shade800
-                          : Colors.grey.shade200)
-                      .withAlpha(200),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  _isDragging ? _tooltipText : pctStr,
-                  style: TextStyle(
-                    fontSize: 9,
-                    fontFamily: 'monospace',
-                    fontWeight:
-                        _isDragging ? FontWeight.bold : FontWeight.normal,
-                    color: widget.isDark ? Colors.white : Colors.black87,
+                  width: _barWidth,
+                  height: thumbH,
+                  decoration: BoxDecoration(
+                    color: _isDragging ? thumbDragColor : thumbColor,
+                    borderRadius: BorderRadius.circular(2),
                   ),
                 ),
               ),
-            ),
-          ],
-        );
-      },
+              // 百分比标签
+              Positioned(
+                left: 0,
+                top: (thumbTop + thumbH / 2 - 10).clamp(0.0, barHeight - 20),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: (d ? Colors.grey.shade800 : Colors.grey.shade200)
+                        .withAlpha(220),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontFamily: 'monospace',
+                      fontWeight:
+                          _isDragging ? FontWeight.bold : FontWeight.normal,
+                      color: d ? Colors.white : Colors.black87,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 }
